@@ -81,7 +81,7 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			bonePos.rotation_mode = "QUATERNION"
 			#convert to parent - child matrix
 			if bone.parent:
-				parentChildMatrix = bone.parent.matrix_local.inverted() * bone.matrix_local
+				parentChildMatrix = mat_mult(bone.parent.matrix_local.inverted(), bone.matrix_local)
 			else:
 				parentChildMatrix = bone.matrix_local
 			#get parent 2 bone transform for animation conversion
@@ -91,7 +91,7 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			
 			for i in range(len(boneAnim['transform'])):
 				bonePos.location = boneAnim['transform'][i][1] - startLoc
-				bonePos.rotation_quaternion =  startRot * boneAnim['rotation'][i][1]
+				bonePos.rotation_quaternion = mat_mult(startRot, boneAnim['rotation'][i][1])
 				bonePos.keyframe_insert(data_path = "location", frame = boneAnim['transform'][i][0], index= -1)
 				bonePos.keyframe_insert(data_path = "rotation_quaternion", frame = boneAnim['rotation'][i][0])
 	
@@ -268,6 +268,12 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			
 		return 	animationData
 
+
+def mat_mult(mat1, mat2):
+	if bpy.app.version >= (2, 80, 0):
+		return mat1 @ mat2
+	return mat1 * mat2
+
 def select_all(select):
 	if select:
 		actionString = 'SELECT'
@@ -292,11 +298,17 @@ def menu_func_import(self, context):
 		
 def register():
 	bpy.utils.register_class(PokeMastAnimImport)
-	bpy.types.INFO_MT_file_import.append(menu_func_import)
+	if bpy.app.version >= (2, 80, 0):
+		bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+	else:
+		bpy.types.INFO_MT_file_import.append(menu_func_import)
 
 def unregister():
 	bpy.utils.unregister_class(PokeMastAnimImport)
-	bpy.types.INFO_MT_file_import.remove(menu_func_import)
+	if bpy.app.version >= (2, 80, 0):
+		bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+	else:
+		bpy.types.INFO_MT_file_import.remove(menu_func_import)
 	
 if __name__ == "__main__":
 	register()
