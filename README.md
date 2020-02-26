@@ -1,5 +1,5 @@
 # LMD_Animation_Loader
-Blender 2.79 import script for LMD animations files from Pokemon Masters.
+Blender 2.79 / 2.80+ import script for LMD animations files from Pokemon Masters.
 
 Place it in your Blender install's AddOn folder and enable it in the preferences.
 
