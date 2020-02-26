@@ -76,6 +76,8 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 		scn.frame_end = self.maxFrames
 		bpy.context.scene.render.fps = fps
 		for boneName in Animation.keys():
+			if boneName not in armature.pose.bones:
+				continue
 			bonePos = armature.pose.bones[boneName]
 			bone = armature.data.bones[boneName]
 			bonePos.rotation_mode = "QUATERNION"
