@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Import Pokemon Masters Animation",
 	"author": "Romulion",
-	"version": (0, 10, 0),
+	"version": (0, 10, 1),
 	"blender": (2, 80, 0),
 	"location": "File > Import-Export",
 	"description": "A tool designed to import LMD animation from the mobile game Pokemon Masters",
@@ -92,9 +92,12 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 				parentChildMatrix = mat_mult(bone.parent.matrix_local.inverted(), bone.matrix_local)
 			else:
 				parentChildMatrix = bone.matrix_local
+
+			parentChildMatrix.invert()
 			#get parent 2 bone transform for animation conversion
-			startLoc = parentChildMatrix.translation
-			startRot = parentChildMatrix.to_quaternion().inverted()
+			#startLoc = parentChildMatrix.translation
+			startRot = parentChildMatrix.to_quaternion()
+			
 
 			#adding rotation frames
 			for i in range(len(animationRotaion['time'])):
@@ -103,8 +106,8 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 
 			#adding translation frames
 			for n in range(len(animationTranslate['time'])):
-				bonePos.location = animationTranslate['frames'][n] - startLoc
-				bonePos.keyframe_insert(data_path = "location", frame = round(animationTranslate['time'][n] * self.maxFrames), index= -1)
+				bonePos.location = mat_mult(parentChildMatrix,  animationTranslate['frames'][n])
+				bonePos.keyframe_insert(data_path = "location", frame = round(animationTranslate['time'][n] * self.maxFrames))
 
 	def ReadString(self, CurFile,Start):
 		CurFile.seek(Start)
