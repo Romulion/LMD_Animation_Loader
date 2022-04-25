@@ -26,6 +26,8 @@ from bpy.props import (BoolProperty,
 					   )
 from bpy_extras.io_utils import ImportHelper
 
+if bpy.app.version < (2, 80, 0):
+    bl_info['blender'] = (2, 79, 0)
 
 class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 	bl_idname = "import_scene.pokemonmastersanim"
@@ -72,6 +74,9 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 		scn.frame_start = 0
 		scn.frame_end = self.maxFrames
 		bpy.context.scene.render.fps = fps
+
+		mat_identity = mathutils.Matrix.Identity(4)
+
 		for boneName in AnimationRaw.keys():
 			#skip non existent bones
 			if boneName not in armature.pose.bones:
@@ -93,7 +98,9 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			else:
 				parentChildMatrix = bone.matrix_local
 
-			parentChildMatrix.invert()
+			#check if matrix invertable
+			if parentChildMatrix != mat_identity:
+				parentChildMatrix.invert()
 			#get parent 2 bone transform for animation conversion
 			#startLoc = parentChildMatrix.translation
 			startRot = parentChildMatrix.to_quaternion()
