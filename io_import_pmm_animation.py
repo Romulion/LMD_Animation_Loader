@@ -1,7 +1,7 @@
 bl_info = {
 	"name": "Import Pokemon Masters Animation",
 	"author": "Romulion",
-	"version": (0, 10, 1),
+	"version": (0, 10, 2),
 	"blender": (2, 80, 0),
 	"location": "File > Import-Export",
 	"description": "A tool designed to import LMD animation from the mobile game Pokemon Masters",
@@ -85,8 +85,6 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			boneRotData = []
 			boneTransData = []
 			animationData = AnimationRaw[boneName]
-			animationRotaion = animationData['rotation']
-			animationTranslate = animationData['transform']
 
 			bonePos = armature.pose.bones[boneName]
 			bone = armature.data.bones[boneName]
@@ -104,17 +102,49 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
 			#get parent 2 bone transform for animation conversion
 			#startLoc = parentChildMatrix.translation
 			startRot = parentChildMatrix.to_quaternion()
-			
+
+			animationData = self.PrecessAnimation(animationData, boneName)
+			animationRotaion = animationData['rotation']
+			animationTranslate = animationData['transform']
 
 			#adding rotation frames
 			for i in range(len(animationRotaion['time'])):
 				bonePos.rotation_quaternion = mat_mult(startRot, animationRotaion['frames'][i])
-				bonePos.keyframe_insert(data_path = "rotation_quaternion", frame = round(animationRotaion['time'][i] * self.maxFrames))
+				bonePos.keyframe_insert(data_path = "rotation_quaternion", frame = animationRotaion['time'][i])
 
 			#adding translation frames
 			for n in range(len(animationTranslate['time'])):
 				bonePos.location = mat_mult(parentChildMatrix,  animationTranslate['frames'][n])
-				bonePos.keyframe_insert(data_path = "location", frame = round(animationTranslate['time'][n] * self.maxFrames))
+				bonePos.keyframe_insert(data_path = "location", frame = animationTranslate['time'][n])
+
+	def PrecessAnimation(self, animationData, name):
+
+		animationRotaion = animationData['rotation']
+		animationTranslate = animationData['transform']
+		for i in range(len(animationTranslate['time'])):
+			animationTranslate['time'][i] = round(animationTranslate['time'][i] * self.maxFrames)
+
+		for i in range(len(animationRotaion['time'])):
+			animationRotaion['time'][i] = round(animationRotaion['time'][i] * self.maxFrames)
+		
+		#fix wrong quaternion interpolation
+		i = 0
+		prev_frame = { "frames":  animationRotaion['frames'][0], "time": animationRotaion['time'][0]}
+		for n in range(len(animationRotaion['frames'])):
+			frames_passed = animationRotaion['time'][i] - prev_frame['time']
+			if frames_passed > 1:
+
+				end_frame = animationRotaion['frames'][i]
+				#add between frames
+				for m in range(1, frames_passed):
+					animationRotaion["frames"].insert(i,  prev_frame["frames"].slerp(end_frame, m / frames_passed))
+					animationRotaion["time"].insert(i,  prev_frame['time'] + m)
+					i = i + 1
+
+			prev_frame = { "frames":  animationRotaion['frames'][i], "time": animationRotaion['time'][i]}
+			i = i + 1
+		
+		return {'rotation': animationRotaion, 'transform': animationTranslate}
 
 	def ReadString(self, CurFile,Start):
 		CurFile.seek(Start)
