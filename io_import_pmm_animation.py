@@ -1,269 +1,369 @@
-bl_info = {
-	"name": "Import Pokemon Masters Animation",
-	"author": "Romulion",
-	"version": (0, 10, 2),
-	"blender": (2, 80, 0),
-	"location": "File > Import-Export",
-	"description": "A tool designed to import LMD animation from the mobile game Pokemon Masters",
-	"warning": "",
-	"wiki_url": "",
-	"tracker_url": "",
-	"category": "Import-Export"}
-
-import bpy
-import bmesh
-import os
-import io
-import struct
-import math
-import mathutils
-import numpy as np
-from bpy.props import (BoolProperty,
-					   FloatProperty,
-					   StringProperty,
-					   EnumProperty,
-					   CollectionProperty
-					   )
 from bpy_extras.io_utils import ImportHelper
+from bpy.props import (BoolProperty,
+                       FloatProperty,
+                       StringProperty,
+                       EnumProperty,
+                       CollectionProperty
+                       )
+import numpy as np
+import mathutils
+import math
+import struct
+import io
+import os
+import bmesh
+import bpy
+bl_info = {
+    "name": "Import Pokemon Masters Animation",
+    "author": "Romulion",
+    "version": (0, 10, 2),
+    "blender": (2, 80, 0),
+    "location": "File > Import-Export",
+    "description": "A tool designed to import LMD animation from the mobile game Pokemon Masters",
+    "warning": "",
+    "wiki_url": "",
+    "tracker_url": "",
+    "category": "Import-Export"}
+
 
 if bpy.app.version < (2, 80, 0):
     bl_info['blender'] = (2, 79, 0)
 
+
 class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
-	bl_idname = "import_scene.pokemonmastersanim"
-	bl_label = "Import anim"
-	bl_options = {'PRESET', 'UNDO'}
-	
-	filename_ext = ".wismda"
-	filter_glob = StringProperty(
-			default="*.lmd",
-			options={'HIDDEN'},
-			)
- 
-	filepath = StringProperty(subtype='FILE_PATH',)
-	files = CollectionProperty(type=bpy.types.PropertyGroup)
-	fps = 60
-	def draw(self, context):
-		layout = self.layout
+    bl_idname = "import_scene.pokemonmastersanim"
+    bl_label = "Import anim"
+    bl_options = {'PRESET', 'UNDO'}
 
-	def execute(self, context):
-		#skip if no armature binded
-		if not bpy.context.active_object or bpy.context.active_object.type != 'ARMATURE':
-			return {'CANCELLED'}
-		
-		CurFile = open(self.filepath,"rb")
-		
-		CurFile.seek(100)
-		AnimationLength = struct.unpack('f', CurFile.read(4))[0]
-		
-		AnimationRaw = self.ReadAnimation(CurFile,116)
-		self.maxFrames = round(AnimationLength * self.fps)
-		self.ApplyAnimation(AnimationRaw, self.fps)
-		CurFile.close()
-		return {'FINISHED'}
-		
-	def invoke(self, context, event):
-		context.window_manager.fileselect_add(self)
-		return {'RUNNING_MODAL'}
+    filename_ext = ".wismda"
+    filter_glob = StringProperty(
+        default="*.lmd",
+        options={'HIDDEN'},
+    )
 
-	def ApplyAnimation(self, AnimationRaw, fps):
-		armature = bpy.context.active_object
-		armature.animation_data_clear()
-		scn = bpy.context.scene
-		scn.frame_set(0)
-		scn.frame_start = 0
-		scn.frame_end = self.maxFrames
-		bpy.context.scene.render.fps = fps
+    filepath = StringProperty(subtype='FILE_PATH',)
+    files = CollectionProperty(type=bpy.types.PropertyGroup)
+    fps = 60
 
-		mat_identity = mathutils.Matrix.Identity(4)
+    def draw(self, context):
+        layout = self.layout
 
-		for boneName in AnimationRaw.keys():
-			#skip non existent bones
-			if boneName not in armature.pose.bones:
-				continue
+    def execute(self, context):
+        # skip if no armature binded
+        if not bpy.context.active_object or bpy.context.active_object.type != 'ARMATURE':
+            return {'CANCELLED'}
 
-			boneRotData = []
-			boneTransData = []
-			animationData = AnimationRaw[boneName]
+        CurFile = open(self.filepath, "rb")
 
-			bonePos = armature.pose.bones[boneName]
-			bone = armature.data.bones[boneName]
-			bonePos.rotation_mode = "QUATERNION"
+        # chose anim type 20 - trainer, 8 - pokemon
+        anim_type = int.from_bytes(CurFile.read(4), byteorder='little')
 
-			#convert to parent - child matrix
-			if bone.parent:
-				parentChildMatrix = mat_mult(bone.parent.matrix_local.inverted(), bone.matrix_local)
-			else:
-				parentChildMatrix = bone.matrix_local
+        if anim_type == 20:
+            CurFile.seek(100)
+        else:
+            CurFile.seek(72)
+        AnimationLength = struct.unpack('f', CurFile.read(4))[0]
+        self.report({'INFO'}, str(AnimationLength))
+        AnimationRaw = self.ReadAnimation(CurFile, anim_type)
+        self.maxFrames = round(AnimationLength * self.fps)
+        self.ApplyAnimation(AnimationRaw, self.fps)
+        CurFile.close()
+        return {'FINISHED'}
 
-			#check if matrix invertable
-			if parentChildMatrix != mat_identity:
-				parentChildMatrix.invert()
-			#get parent 2 bone transform for animation conversion
-			#startLoc = parentChildMatrix.translation
-			startRot = parentChildMatrix.to_quaternion()
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
-			animationData = self.PrecessAnimation(animationData, boneName)
-			animationRotaion = animationData['rotation']
-			animationTranslate = animationData['transform']
+    def ApplyAnimation(self, AnimationRaw, fps):
+        armature = bpy.context.active_object
+        armature.animation_data_clear()
+        scn = bpy.context.scene
+        scn.frame_set(0)
+        scn.frame_start = 0
+        scn.frame_end = self.maxFrames
+        bpy.context.scene.render.fps = fps
 
-			#adding rotation frames
-			for i in range(len(animationRotaion['time'])):
-				bonePos.rotation_quaternion = mat_mult(startRot, animationRotaion['frames'][i])
-				bonePos.keyframe_insert(data_path = "rotation_quaternion", frame = animationRotaion['time'][i])
+        mat_identity = mathutils.Matrix.Identity(4)
 
-			#adding translation frames
-			for n in range(len(animationTranslate['time'])):
-				bonePos.location = mat_mult(parentChildMatrix,  animationTranslate['frames'][n])
-				bonePos.keyframe_insert(data_path = "location", frame = animationTranslate['time'][n])
+        for boneName in AnimationRaw.keys():
+            # skip non existent bones
+            if boneName not in armature.pose.bones:
+                continue
 
-	def PrecessAnimation(self, animationData, name):
+            boneRotData = []
+            boneTransData = []
+            animationData = AnimationRaw[boneName]
 
-		animationRotaion = animationData['rotation']
-		animationTranslate = animationData['transform']
-		for i in range(len(animationTranslate['time'])):
-			animationTranslate['time'][i] = round(animationTranslate['time'][i] * self.maxFrames)
+            bonePos = armature.pose.bones[boneName]
+            bone = armature.data.bones[boneName]
+            if animationData['rotation']['type'] == 1:
+                bonePos.rotation_mode = "QUATERNION"
+            else:
+                #bonePos.rotation_mode = "ZXY"
+                bonePos.rotation_mode = "QUATERNION"
 
-		for i in range(len(animationRotaion['time'])):
-			animationRotaion['time'][i] = round(animationRotaion['time'][i] * self.maxFrames)
-		
-		#fix wrong quaternion interpolation
-		i = 0
-		prev_frame = { "frames":  animationRotaion['frames'][0], "time": animationRotaion['time'][0]}
-		for n in range(len(animationRotaion['frames'])):
-			frames_passed = animationRotaion['time'][i] - prev_frame['time']
-			if frames_passed > 1:
+            # convert to parent - child matrix
+            if bone.parent:
+                parentChildMatrix = mat_mult(
+                    bone.parent.matrix_local.inverted(), bone.matrix_local)
+            else:
+                parentChildMatrix = bone.matrix_local
 
-				end_frame = animationRotaion['frames'][i]
-				#add between frames
-				for m in range(1, frames_passed):
-					animationRotaion["frames"].insert(i,  prev_frame["frames"].slerp(end_frame, m / frames_passed))
-					animationRotaion["time"].insert(i,  prev_frame['time'] + m)
-					i = i + 1
+            # check if matrix invertable
+            if parentChildMatrix != mat_identity:
+                parentChildMatrix.invert()
+            # get parent 2 bone transform for animation conversion
+            #startLoc = parentChildMatrix.translation
+            startRot = parentChildMatrix.to_quaternion()
+            startEuler = parentChildMatrix.to_euler()
 
-			prev_frame = { "frames":  animationRotaion['frames'][i], "time": animationRotaion['time'][i]}
-			i = i + 1
-		
-		return {'rotation': animationRotaion, 'transform': animationTranslate}
+            animationData = self.PrecessAnimation(animationData, boneName)
+            animationRotaion = animationData['rotation']
+            animationTranslate = animationData['translation']
+            animationScale = animationData['scale']
 
-	def ReadString(self, CurFile,Start):
-		CurFile.seek(Start)
-		StringLength = int.from_bytes(CurFile.read(4),byteorder='little')
-		return CurFile.read(StringLength).decode('utf-8')
-	
-	def ReadAnimation(self, CurFile, StartAddr):
-		self.maxFrames = 1
-		CurFile.seek(116)
-		bonesCount = int.from_bytes(CurFile.read(4),byteorder='little')
-		startPosition = CurFile.tell()
-		bonePointers = []
-		for i in range(bonesCount):
-			bonePointers.append(CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little'))
-		
-		
-		animationData = {}
-		for boneAddr in bonePointers:
-			CurFile.seek(boneAddr+4)
-			BoneNamePointer = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			BoneName = self.ReadString(CurFile,BoneNamePointer)
-			CurFile.seek(boneAddr + 20)
-			AnimComponentPointer = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			
-			CurFile.seek(AnimComponentPointer + 12)
-			RotationFramesPointer = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			
-			CurFile.seek(AnimComponentPointer + 16)
-			TransformFramesPointer = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			
-			#Transforms
-			CurFile.seek(TransformFramesPointer + 4)
-			TransformTimeTable = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			#time
-			TimeTable = []
-			CurFile.seek(TransformTimeTable)
-			timeCount = int.from_bytes(CurFile.read(4),byteorder='little')
-			for t in range(timeCount):
-				TimeTable.append(struct.unpack('f', CurFile.read(4))[0])
+            # if boneName == 'Feeler':
+            #   print(startEuler)
+            # adding rotation frames
+            for i in range(len(animationRotaion['time'])):
+                bonePos.rotation_quaternion = mat_mult(
+                    startRot, animationRotaion['frames'][i])
+                bonePos.keyframe_insert(
+                    data_path="rotation_quaternion", frame=animationRotaion['time'][i])
 
-			#transform frames
-			TransformTable = []
-			CurFile.seek(TransformFramesPointer + 12)
-			framesCount = int.from_bytes(CurFile.read(4),byteorder='little')
-			for t in range(int(framesCount/3)):
-				TransformTable.append(mathutils.Vector(struct.unpack('fff', CurFile.read(4*3))))
-				
-			#Rotation
-			CurFile.seek(RotationFramesPointer + 4)
-			RotationTimeTable = CurFile.tell() + int.from_bytes(CurFile.read(4),byteorder='little')
-			
-			#time
-			TimeTable1 = []
-			CurFile.seek(RotationTimeTable)
-			timeCount = int.from_bytes(CurFile.read(4),byteorder='little')
-			for t in range(timeCount):
-				TimeTable1.append(struct.unpack('f', CurFile.read(4))[0])
-			#rotation frames
-			RotationTable = []
-			CurFile.seek(RotationFramesPointer + 12)
-			framesCount = int.from_bytes(CurFile.read(4),byteorder='little')
-			for t in range(int(framesCount/4)):
-				temtQuat = mathutils.Quaternion(struct.unpack('ffff', CurFile.read(4*4)))
-				w = temtQuat.z
-				temtQuat.z = temtQuat.y
-				temtQuat.y = temtQuat.x
-				temtQuat.x = temtQuat.w
-				temtQuat.w = w
-				RotationTable.append(temtQuat)
-				
-			animationData[BoneName] = { 
-				'rotation' : { 'time' : TimeTable1, 'frames' : RotationTable},
-				'transform' : { 'time' : TimeTable, 'frames' : TransformTable}
-			}
-			self.maxFrames = max(self.maxFrames, timeCount)
-			
-		return 	animationData
+            # adding translation frames
+            for n in range(len(animationTranslate['time'])):
+                bonePos.location = mat_mult(
+                    parentChildMatrix,  animationTranslate['frames'][n])
+                bonePos.keyframe_insert(
+                    data_path="location", frame=animationTranslate['time'][n])
+
+            for m in range(len(animationScale['time'])):
+                bonePos.scale = animationScale['frames'][m]
+                bonePos.keyframe_insert(
+                    data_path="scale", frame=animationScale['time'][m])
+
+    def PrecessAnimation(self, animationData, name):
+
+        # Get frame number from timeline
+        animationRotaion = animationData['rotation']
+        animationTranslate = animationData['translation']
+        animationScale = animationData['scale']
+        for i in range(len(animationTranslate['time'])):
+            animationTranslate['time'][i] = round(
+                animationTranslate['time'][i] * self.maxFrames)
+
+        for i in range(len(animationRotaion['time'])):
+            animationRotaion['time'][i] = round(
+                animationRotaion['time'][i] * self.maxFrames)
+
+        for i in range(len(animationScale['time'])):
+            animationScale['time'][i] = round(
+                animationScale['time'][i] * self.maxFrames)
+
+        # fix wrong quaternion interpolation
+        i = 0
+        prev_frame = {
+            "frames":  animationRotaion['frames'][0], "time": animationRotaion['time'][0]}
+        for n in range(len(animationRotaion['frames'])):
+            frames_passed = animationRotaion['time'][i] - \
+                prev_frame['time']
+            if frames_passed > 1:
+
+                end_frame = animationRotaion['frames'][i]
+                # add between frames
+                for m in range(1, frames_passed):
+                    animationRotaion["frames"].insert(
+                        i,  prev_frame["frames"].slerp(end_frame, m / frames_passed))
+                    animationRotaion["time"].insert(
+                        i,  prev_frame['time'] + m)
+                    i = i + 1
+
+            prev_frame = {
+                "frames":  animationRotaion['frames'][i], "time": animationRotaion['time'][i]}
+            i = i + 1
+
+        return {'rotation': animationRotaion, 'translation': animationTranslate, 'scale': animationScale}
+
+    def ReadString(self, CurFile, Start):
+        CurFile.seek(Start)
+        StringLength = int.from_bytes(CurFile.read(4), byteorder='little')
+        return CurFile.read(StringLength).decode('utf-8')
+
+    def ReadAnimation(self, CurFile, anim_type):
+        self.maxFrames = 1
+
+        if anim_type == 8:
+            offset = 92
+        else:
+            offset = 116
+
+        CurFile.seek(offset)
+        bonesCount = int.from_bytes(CurFile.read(4), byteorder='little')
+
+        startPosition = CurFile.tell()
+        bonePointers = []
+        for i in range(bonesCount):
+            bonePointers.append(
+                CurFile.tell() + int.from_bytes(CurFile.read(4), byteorder='little'))
+
+        animationData = {}
+        for boneAddr in bonePointers:
+            CurFile.seek(boneAddr+4)
+            BoneNamePointer = read_pointer(CurFile, boneAddr+4)
+            BoneName = self.ReadString(CurFile, BoneNamePointer)
+
+            # get rotation type 1 - Quaternion, character; 4 - XYZ, pokemon
+            CurFile.seek(boneAddr+12)
+            anim_type = int.from_bytes(CurFile.read(4), byteorder='little')
+            # skip non bone animation
+            CurFile.seek(boneAddr+16)
+            if int.from_bytes(CurFile.read(4), byteorder='little') != 7:
+                continue
+
+            # Read animation components pointers
+            CurFile.seek(boneAddr + 20)
+            AnimComponentPointer = RotationPointer = read_pointer(
+                CurFile, boneAddr + 20)
+
+            ScalePointer = read_pointer(CurFile, AnimComponentPointer + 8)
+            RotationPointer = read_pointer(CurFile, AnimComponentPointer + 12)
+            TranslatePointer = read_pointer(CurFile, AnimComponentPointer + 16)
+
+            # Scale data
+            ScaleTimeTablePointer = read_pointer(
+                CurFile, ScalePointer + 4)
+            ScaleTimeTable = read_time_table(
+                CurFile, ScaleTimeTablePointer)
+
+            # Frames
+            ScaleFramesPointer = read_pointer(
+                CurFile, ScalePointer + 8)
+            ScaleTable = read_vec3_table(CurFile, ScaleFramesPointer)
+
+            # Translate data
+            # Time
+            TranslateTimeTablePointer = read_pointer(
+                CurFile, TranslatePointer + 4)
+            TranslateTimeTable = read_time_table(
+                CurFile, TranslateTimeTablePointer)
+
+            # Frames
+            TranslateFramesPointer = read_pointer(
+                CurFile, TranslatePointer + 8)
+            TranslateTable = read_vec3_table(CurFile, TranslateFramesPointer)
+
+            # Rotation data
+            # Time
+            RotationTimeTablePointer = read_pointer(
+                CurFile, RotationPointer + 4)
+            RotationTimeTable = read_time_table(
+                CurFile, RotationTimeTablePointer)
+
+            # Frames
+            RotationFramesPointer = read_pointer(
+                CurFile, RotationPointer + 8)
+            RotationTable = []
+            CurFile.seek(RotationFramesPointer)
+            framesCount = int.from_bytes(CurFile.read(4), byteorder='little')
+
+            if anim_type == 1:
+                for t in range(int(framesCount/4)):
+                    temtQuat = mathutils.Quaternion(
+                        struct.unpack('ffff', CurFile.read(4*4)))
+                    w = temtQuat.z
+                    temtQuat.z = temtQuat.y
+                    temtQuat.y = temtQuat.x
+                    temtQuat.x = temtQuat.w
+                    temtQuat.w = w
+                    RotationTable.append(temtQuat)
+            else:
+                for t in range(int(framesCount/3)):
+                    tempEuler = mathutils.Euler(
+                        struct.unpack('fff', CurFile.read(4*3)))
+                    RotationTable.append(tempEuler.to_quaternion())
+
+            animationData[BoneName] = {
+                'rotation': {'time': RotationTimeTable, 'frames': RotationTable, 'type': anim_type},
+                'translation': {'time': TranslateTimeTable, 'frames': TranslateTable},
+                'scale': {'time': ScaleTimeTable, 'frames': ScaleTable}
+            }
+
+        return animationData
+
+
+def read_vec3_table(stream, offset):
+    TransformTable = []
+    stream.seek(offset)
+    framesCount = int.from_bytes(stream.read(4), byteorder='little')
+    for t in range(int(framesCount/3)):
+        TransformTable.append(mathutils.Vector(
+            struct.unpack('fff', stream.read(4*3))))
+
+    return TransformTable
+
+
+def read_time_table(stream, offset):
+    TimeTable = []
+    stream.seek(offset)
+    timeCount = int.from_bytes(stream.read(4), byteorder='little')
+    for t in range(timeCount):
+        TimeTable.append(struct.unpack('f', stream.read(4))[0])
+    return TimeTable
+
+
+def read_pointer(stream, offset):
+    stream.seek(offset)
+    return stream.tell() + int.from_bytes(stream.read(4), byteorder='little')
 
 
 def mat_mult(mat1, mat2):
-	if bpy.app.version >= (2, 80, 0):
-		return mat1 @ mat2
-	return mat1 * mat2
+    if bpy.app.version >= (2, 80, 0):
+        return mat1 @ mat2
+    return mat1 * mat2
+
 
 def select_all(select):
-	if select:
-		actionString = 'SELECT'
-	else:
-		actionString = 'DESELECT'
+    if select:
+        actionString = 'SELECT'
+    else:
+        actionString = 'DESELECT'
 
-	if bpy.ops.object.select_all.poll():
-		bpy.ops.object.select_all(action=actionString)
+    if bpy.ops.object.select_all.poll():
+        bpy.ops.object.select_all(action=actionString)
 
-	if bpy.ops.mesh.select_all.poll():
-		bpy.ops.mesh.select_all(action=actionString)
+    if bpy.ops.mesh.select_all.poll():
+        bpy.ops.mesh.select_all(action=actionString)
 
-	if bpy.ops.pose.select_all.poll():
-		bpy.ops.pose.select_all(action=actionString)
+    if bpy.ops.pose.select_all.poll():
+        bpy.ops.pose.select_all(action=actionString)
+
 
 def utils_set_mode(mode):
-	if bpy.ops.object.mode_set.poll():
-		bpy.ops.object.mode_set(mode=mode, toggle=False)
+    if bpy.ops.object.mode_set.poll():
+        bpy.ops.object.mode_set(mode=mode, toggle=False)
+
 
 def menu_func_import(self, context):
-	self.layout.operator(PokeMastAnimImport.bl_idname, text="Pokemon Masters Animations(.lmd)")		
-		
+    self.layout.operator(PokeMastAnimImport.bl_idname,
+                         text="Pokemon Masters Animations(.lmd)")
+
+
 def register():
-	bpy.utils.register_class(PokeMastAnimImport)
-	if bpy.app.version >= (2, 80, 0):
-		bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
-	else:
-		bpy.types.INFO_MT_file_import.append(menu_func_import)
+    bpy.utils.register_class(PokeMastAnimImport)
+    if bpy.app.version >= (2, 80, 0):
+        bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+    else:
+        bpy.types.INFO_MT_file_import.append(menu_func_import)
+
 
 def unregister():
-	bpy.utils.unregister_class(PokeMastAnimImport)
-	if bpy.app.version >= (2, 80, 0):
-		bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
-	else:
-		bpy.types.INFO_MT_file_import.remove(menu_func_import)
-	
+    bpy.utils.unregister_class(PokeMastAnimImport)
+    if bpy.app.version >= (2, 80, 0):
+        bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+    else:
+        bpy.types.INFO_MT_file_import.remove(menu_func_import)
+
+
 if __name__ == "__main__":
-	register()
+    register()
