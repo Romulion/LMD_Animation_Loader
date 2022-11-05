@@ -12,14 +12,15 @@ import struct
 import io
 import os
 import bmesh
+import re
 import bpy
 bl_info = {
     "name": "Import Pokemon Masters Animation",
-    "author": "Romulion",
-    "version": (0, 10, 2),
+    "author": "Romulion for initial code, SleepyZay for Pokemon anim support, Plastered_Crab for bulk importing and QOL improvements",
+    "version": (0, 10, 3),
     "blender": (2, 80, 0),
     "location": "File > Import-Export",
-    "description": "A tool designed to import LMD animation from the mobile game Pokemon Masters",
+    "description": "A tool designed to import LMD animation from the mobile game Pokemon Masters.",
     "warning": "",
     "wiki_url": "",
     "tracker_url": "",
@@ -30,19 +31,36 @@ if bpy.app.version < (2, 80, 0):
     bl_info['blender'] = (2, 79, 0)
 
 
+from bpy.types import (
+                Operator,
+                OperatorFileListElement,
+                )
+
+
+
+
 class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.pokemonmastersanim"
     bl_label = "Import anim"
     bl_options = {'PRESET', 'UNDO'}
 
+    files: CollectionProperty(
+            name="File Path",
+            type=OperatorFileListElement,
+            )
+    directory: StringProperty(
+            subtype='DIR_PATH',
+            )
+
+    #updated the filter_glob to properly filter all non .lmd files out. 3.0+ Blender requires : instead of = now
     filename_ext = ".wismda"
-    filter_glob = StringProperty(
+    filter_glob: StringProperty(
         default="*.lmd",
+        maxlen=255,
         options={'HIDDEN'},
     )
 
     filepath = StringProperty(subtype='FILE_PATH',)
-    files = CollectionProperty(type=bpy.types.PropertyGroup)
     fps = 60
 
     def draw(self, context):
@@ -53,31 +71,44 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
         if not bpy.context.active_object or bpy.context.active_object.type != 'ARMATURE':
             return {'CANCELLED'}
 
-        CurFile = open(self.filepath, "rb")
+        #adds in the ability to select multiple .lmd files at once (pressing the A key to select all works so much faster than doing them all one by one)
+        for file_elem in self.files:
+            #ignores the uv and cam animations that cause errors and crash the script
+            if re.search ('_uv', file_elem.name):
+                print("Skipping detected uv file")
+            elif re.search ('_cam', file_elem.name):
+                print("Skipping detected cam file")
+            elif re.search ('.animseq', file_elem.name):
+                print("Skipping detected animseq file")
+            else:
+                filepath = os.path.join(self.directory, file_elem.name)
+                CurFile = open(filepath, "rb")
 
-        # chose anim type 20 - trainer, 8 - pokemon
-        anim_type = int.from_bytes(CurFile.read(4), byteorder='little')
+                # chose anim type 20 - trainer, 8 - pokemon
+                anim_type = int.from_bytes(CurFile.read(4), byteorder='little')
 
-        if anim_type == 20:
-            CurFile.seek(100)
-        else:
-            CurFile.seek(72)
-        AnimationLength = struct.unpack('f', CurFile.read(4))[0]
-        self.report({'INFO'}, str(AnimationLength))
-        AnimationRaw = self.ReadAnimation(CurFile, anim_type)
-        self.maxFrames = round(AnimationLength * self.fps)
-        self.ApplyAnimation(AnimationRaw, self.fps)
-        CurFile.close()
+                if anim_type == 20:
+                    CurFile.seek(100)
+                else:
+                    CurFile.seek(72)
+                AnimationLength = struct.unpack('f', CurFile.read(4))[0]
+                self.report({'INFO'}, str(AnimationLength))
+                AnimationRaw = self.ReadAnimation(CurFile, anim_type)
+                self.maxFrames = round(AnimationLength * self.fps)
+                self.ApplyAnimation(AnimationRaw, self.fps, file_elem.name)
+                CurFile.close()
+		
         return {'FINISHED'}
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
-    def ApplyAnimation(self, AnimationRaw, fps):
+    def ApplyAnimation(self, AnimationRaw, fps, filename):
         armature = bpy.context.active_object
         armature.animation_data_clear()
         scn = bpy.context.scene
+
         scn.frame_set(0)
         scn.frame_start = 0
         scn.frame_end = self.maxFrames
@@ -142,6 +173,36 @@ class PokeMastAnimImport(bpy.types.Operator, ImportHelper):
                 bonePos.scale = animationScale['frames'][m]
                 bonePos.keyframe_insert(
                     data_path="scale", frame=animationScale['time'][m])
+
+        #extra stuff to name Actions properly based on the file name and character name/alt
+        print(filename)
+        indexNum = self.find_nth(filename, '_', 1)
+        indexName = self.find_nth(filename, '_', 2)
+        indexNameEnd = self.find_nth(filename, '_', 3)
+        indexUnder = self.find_nth(filename, '_', 4)
+
+        numCode = filename[indexNum + 1 : indexName :]
+
+        charName = filename[indexName + 1 : indexNameEnd :]
+
+        filename = filename[indexUnder + 1 : len(filename)-4 :]
+        if len(filename) == 2:
+            #adds extra context to filename of mouth animations
+            filename = 'mouth_' + filename
+
+        #adds nice naming convention of: [trainerName + trainerAlt] animationTitle
+        filename = '[' + charName + '_' + numCode + '] ' + filename
+        armature.animation_data.action.name = filename
+
+        #forces all action animations to have fake users so that Beldner doesn't delete the unused ones upon exiting the software
+        armature.animation_data.action.use_fake_user = True
+
+    def find_nth(self, haystack, needle, n):
+        start = haystack.find(needle)
+        while start >= 0 and n > 1:
+            start = haystack.find(needle, start+len(needle))
+            n -= 1
+        return start
 
     def PrecessAnimation(self, animationData, name):
 
